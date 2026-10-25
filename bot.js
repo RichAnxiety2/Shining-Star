@@ -1,5 +1,5 @@
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
 
 const TOKEN = process.env.TELEGRAM_TOKEN;
 const ADMIN_ID = String(process.env.TELEGRAM_CHAT_ID);
