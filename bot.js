@@ -1,8 +1,6 @@
 const TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-
-const API =
-  "https://api.eleicoes.dev/v1/results?office=president&scope=br";
+const API_KEY = process.env.ELEICOES_API_KEY;
 
 async function enviarMensagem(texto) {
   await fetch(
@@ -10,28 +8,42 @@ async function enviarMensagem(texto) {
     {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         chat_id: CHAT_ID,
-        text: texto,
-      }),
+        text: texto
+      })
     }
   );
 }
 
 async function verificar() {
   try {
-    const response = await fetch(API);
-    const data = await response.json();
+    const response = await fetch(
+      "https://eleicoes.dev/results?office=president&scope=br",
+      {
+        headers: {
+          Authorization: `Bearer ${API_KEY}`
+        }
+      }
+    );
 
-    console.log(data);
+    const texto = await response.text();
+
+    console.log("STATUS:", response.status);
+    console.log(texto);
 
     await enviarMensagem(
-      `📊 Consulta realizada com sucesso`
+      `✅ API respondeu com status ${response.status}`
     );
+
   } catch (erro) {
     console.error(erro);
+
+    await enviarMensagem(
+      `❌ Erro: ${erro.message}`
+    );
   }
 }
 
