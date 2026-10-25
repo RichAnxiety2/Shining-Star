@@ -1,11 +1,44 @@
+const fs = require("fs");
+const path = require("path");
+
 const TOKEN = process.env.TELEGRAM_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const ADMIN_ID = String(process.env.TELEGRAM_CHAT_ID);
 const URL_TSE =
   "https://resultados.tse.jus.br/oficial/ele2026/6258/dados/br/br-c0001-e006258-u.jws";
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
+const DATA_DIR = process.env.DATA_DIR ?? "./data";
+const ARQUIVO_ASSINANTES = path.join(DATA_DIR, "assinantes.json");
+
+function carregarAssinantes() {
+  try {
+    return JSON.parse(fs.readFileSync(ARQUIVO_ASSINANTES, "utf8"));
+  } catch {
+    return [];
+  }
+}
+
+function salvarAssinantes() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(ARQUIVO_ASSINANTES, JSON.stringify([...destinatarios]));
+  } catch (erro) {
+    console.error("Erro ao salvar assinantes:", erro.message);
+  }
+}
+
+const destinatarios = new Set([
+  ADMIN_ID,
+  ...carregarAssinantes(),
+  ...(process.env.TELEGRAM_CHAT_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+]);
+
 let intervaloMin = 1;
 let ultimaSt = null;
+let ultimaMensagem = null;
 let offsetUpdates = 0;
 let acordarMonitor = null;
 
@@ -18,13 +51,23 @@ async function chamarTelegram(metodo, corpo) {
   return res.json();
 }
 
-function enviarMensagem(texto, extra = {}) {
+function enviarMensagem(chatId, texto, extra = {}) {
   return chamarTelegram("sendMessage", {
-    chat_id: CHAT_ID,
+    chat_id: chatId,
     text: texto,
     parse_mode: "HTML",
     ...extra,
   });
+}
+
+// Envia para todos os assinantes. Se alguém bloqueou o bot, os outros recebem normalmente.
+async function transmitir(texto, extra = {}) {
+  const resultados = await Promise.allSettled(
+    [...destinatarios].map((id) => enviarMensagem(id, texto, extra))
+  );
+  resultados
+    .filter((r) => r.status === "rejected")
+    .forEach((r) => console.error("Falha ao enviar:", r.reason?.message));
 }
 
 function dormir(ms) {
@@ -49,12 +92,10 @@ function decodificarJws(token) {
   return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
 }
 
-// 7560 -> "7.560"
 function milhar(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
-// "52,27" -> "52,3"
 function fmtPct(valor) {
   return Number(String(valor).replace(",", "."))
     .toFixed(1)
@@ -97,15 +138,16 @@ async function consultar() {
   const st = dados.s.st;
   if (st === ultimaSt) return;
 
-  await enviarMensagem(montarMensagem(dados));
+  const texto = montarMensagem(dados);
+  await transmitir(texto);
+  ultimaMensagem = texto;
   ultimaSt = st;
 }
 
 function tecladoIntervalo() {
-  const opcoes = [1, 5, 10];
   return {
     inline_keyboard: [
-      opcoes.map((m) => ({
+      [1, 5, 10].map((m) => ({
         text: m === intervaloMin ? `${m} min (atual)` : `${m} min`,
         callback_data: `intervalo:${m}`,
       })),
@@ -113,34 +155,62 @@ function tecladoIntervalo() {
   };
 }
 
-async function tratarUpdate(update) {
-  if (update.message?.text?.startsWith("/intervalo")) {
-    if (String(update.message.chat.id) !== String(CHAT_ID)) return;
+async function tratarMensagem(message) {
+  const chatId = String(message.chat.id);
+  const texto = message.text ?? "";
+  const nome = message.from?.first_name ?? "sem nome";
+
+  if (texto.startsWith("/start")) {
+    const jaEra = destinatarios.has(chatId);
+    destinatarios.add(chatId);
+
+    if (jaEra) {
+      await enviarMensagem(chatId, "Você já recebe as atualizações da apuração.");
+      return;
+    }
+
+    salvarAssinantes();
+
     await enviarMensagem(
-      `<b>Intervalo de atualização</b>\nAtual: ${intervaloMin} min`,
-      { reply_markup: tecladoIntervalo() }
+      chatId,
+      "Acesso liberado. Você passa a receber as atualizações da apuração."
+    );
+    if (ultimaMensagem) await enviarMensagem(chatId, ultimaMensagem);
+
+    await enviarMensagem(
+      ADMIN_ID,
+      `Novo assinante: <b>${escapeHtml(nome)}</b> (<code>${chatId}</code>). Total: ${destinatarios.size}.`
     );
     return;
   }
 
-  if (update.callback_query) {
-    const cb = update.callback_query;
-    if (String(cb.message?.chat?.id) !== String(CHAT_ID)) return;
+  if (chatId !== ADMIN_ID) return;
 
-    const [acao, valor] = (cb.data || "").split(":");
-    if (acao !== "intervalo") return;
-
-    const novo = Number(valor);
-    if (![1, 5, 10].includes(novo)) return;
-
-    intervaloMin = novo;
-    await chamarTelegram("answerCallbackQuery", {
-      callback_query_id: cb.id,
-      text: `Intervalo definido para ${novo} min`,
-    });
-    await enviarMensagem(`Atualização definida para a cada ${novo} min.`);
-    acordarMonitor?.();
+  if (texto.startsWith("/intervalo")) {
+    await enviarMensagem(
+      ADMIN_ID,
+      `<b>Intervalo de atualização</b>\nAtual: ${intervaloMin} min`,
+      { reply_markup: tecladoIntervalo() }
+    );
   }
+}
+
+async function tratarCallback(cb) {
+  if (String(cb.from?.id) !== ADMIN_ID) return;
+
+  const [acao, valor] = (cb.data || "").split(":");
+  if (acao !== "intervalo") return;
+
+  const novo = Number(valor);
+  if (![1, 5, 10].includes(novo)) return;
+
+  intervaloMin = novo;
+  await chamarTelegram("answerCallbackQuery", {
+    callback_query_id: cb.id,
+    text: `Intervalo definido para ${novo} min`,
+  });
+  await enviarMensagem(ADMIN_ID, `Atualização definida para a cada ${novo} min.`);
+  acordarMonitor?.();
 }
 
 async function loopMonitor() {
@@ -164,7 +234,8 @@ async function loopComandos() {
       });
       for (const update of r.result ?? []) {
         offsetUpdates = update.update_id + 1;
-        await tratarUpdate(update);
+        if (update.message) await tratarMensagem(update.message);
+        if (update.callback_query) await tratarCallback(update.callback_query);
       }
     } catch (erro) {
       console.error("Erro nos comandos:", erro.message);
