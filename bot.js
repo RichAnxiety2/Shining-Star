@@ -39,6 +39,7 @@ const destinatarios = new Set([
 let intervaloMin = 1;
 let ultimaSt = null;
 let ultimaMensagem = null;
+const ultimosPct = new Map();
 let offsetUpdates = 0;
 let acordarMonitor = null;
 
@@ -102,29 +103,43 @@ function fmtPct(valor) {
     .replace(".", ",");
 }
 
-function montarMensagem(dados) {
-  const s = dados.s;
-  const hora = (dados.hg || "").slice(0, 5);
+function fmtVariacao(d) {
+  const r = Math.round(d * 10) / 10;
+  const sinal = r > 0 ? "+" : r < 0 ? "-" : "";
+  return `${sinal}${Math.abs(r).toFixed(1).replace(".", ",")}%`;
+}
 
-  const candidatos = dados.carg[0].agr
+function listarCandidatos(dados) {
+  return dados.carg[0].agr
     .flatMap((a) =>
       (a.par ?? []).flatMap((p) =>
         (p.cand ?? []).map((c) => ({
           nome: c.nmu || c.nm,
+          pctNum: Number(String(c.pvap).replace(",", ".")),
           pct: fmtPct(c.pvap),
           votos: Number(c.vap),
         }))
       )
     )
     .sort((a, b) => b.votos - a.votos);
+}
+
+function montarMensagem(dados) {
+  const s = dados.s;
+  const hora = (dados.hg || "").slice(0, 5);
+
+  const linhas = listarCandidatos(dados).map((c) => {
+    const anterior = ultimosPct.get(c.nome);
+    const variacao =
+      anterior === undefined ? "" : ` ${fmtVariacao(c.pctNum - anterior)}`;
+    return `<b>${escapeHtml(c.nome)}</b>: ${c.pct}% (${milhar(c.votos)} votos)${variacao}`;
+  });
 
   return [
     `<b>Apuração atualizada${hora ? ` - ${hora}` : ""}</b>`,
     `Seções totalizadas: ${fmtPct(s.pst)}% (${milhar(s.st)}/${milhar(s.ts)})`,
     ``,
-    ...candidatos.map(
-      (c) => `<b>${escapeHtml(c.nome)}</b>: ${c.pct}% (${milhar(c.votos)} votos)`
-    ),
+    ...linhas,
   ].join("\n");
 }
 
@@ -140,6 +155,11 @@ async function consultar() {
 
   const texto = montarMensagem(dados);
   await transmitir(texto);
+
+  for (const c of listarCandidatos(dados)) {
+    ultimosPct.set(c.nome, c.pctNum);
+  }
+
   ultimaMensagem = texto;
   ultimaSt = st;
 }
