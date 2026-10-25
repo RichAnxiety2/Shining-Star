@@ -1,0 +1,10 @@
+{
+  "name": "eleicoes-telegram-bot",
+  "version": "1.0.0",
+  "description": "Bot Telegram para monitorar resultados eleitorais",
+  "main": "bot.js",
+  "type": "module",
+  "scripts": {
+    "start": "node bot.js"
+  }
+}
