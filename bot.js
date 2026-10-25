@@ -24,7 +24,8 @@ async function verificar() {
       "https://eleicoes.dev/results?office=president&scope=br",
       {
         headers: {
-          Authorization: `Bearer ${API_KEY}`
+          Authorization: `Bearer ${API_KEY}`,
+          Accept: "application/json"
         }
       }
     );
@@ -32,17 +33,17 @@ async function verificar() {
     const texto = await response.text();
 
     console.log("STATUS:", response.status);
-    console.log(texto);
+    console.log("BODY:", texto);
 
     await enviarMensagem(
-      `✅ API respondeu com status ${response.status}`
+      `Status ${response.status}\n\n${texto.substring(0, 300)}`
     );
 
   } catch (erro) {
     console.error(erro);
 
     await enviarMensagem(
-      `❌ Erro: ${erro.message}`
+      `ERRO: ${erro.message}`
     );
   }
 }
