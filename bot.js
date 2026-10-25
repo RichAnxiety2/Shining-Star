@@ -4,14 +4,25 @@ const URL_TSE =
   "https://resultados.tse.jus.br/oficial/ele2026/6258/dados/br/br-c0001-e006258-u.jws";
 const INTERVALO_MS = 60_000;
 
-let ultimoIdg = null;
+let ultimaSt = null;
 
 async function enviarMensagem(texto) {
   await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: CHAT_ID, text: texto }),
+    body: JSON.stringify({
+      chat_id: CHAT_ID,
+      text: texto,
+      parse_mode: "HTML",
+    }),
   });
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&")
+    .replace(/</g, "<")
+    .replace(/>/g, ">");
 }
 
 function decodificarJws(token) {
@@ -19,20 +30,45 @@ function decodificarJws(token) {
   return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
 }
 
+function fmtNumero(n) {
+  return Number(n).toLocaleString("pt-BR");
+}
+
+// "52,27" -> "52,3"
+function fmtPct(valor) {
+  return Number(String(valor).replace(",", "."))
+    .toFixed(1)
+    .replace(".", ",");
+}
+
 function montarMensagem(dados) {
-  const cargo = dados.carg[0];
-  const candidatos = cargo.agr.flatMap((a) =>
-    (a.par ?? []).flatMap((p) =>
-      (p.cand ?? []).map((c) => `${c.nm}: ${c.vap} votos (${c.pvap}%)`)
+  const st = Number(dados.st);
+  const ts = Number(dados.ts);
+  const pctSecoes = fmtPct(((st / ts) * 100).toString().replace(".", ","));
+  const hora = (dados.hg || "").slice(0, 5);
+
+  const candidatos = dados.carg[0].agr
+    .flatMap((a) =>
+      (a.par ?? []).flatMap((p) =>
+        (p.cand ?? []).map((c) => ({
+          nome: c.nmu || c.nm,
+          pct: fmtPct(c.pvap),
+          votos: Number(c.vap),
+        }))
+      )
     )
+    .sort((a, b) => b.votos - a.votos);
+
+  const linhasCandidatos = candidatos.map(
+    (c) =>
+      `<b>${escapeHtml(c.nome)}</b>: ${c.pct}% (${fmtNumero(c.votos)} votos)`
   );
 
   return [
-    `Apuração presidente - 2º turno`,
-    `Seções totalizadas: ${dados.s.pst}% (geração ${dados.idg})`,
-    `Comparecimento: ${dados.e.pc}%`,
+    `<b>Apuração atualizada${hora ? ` - ${hora}` : ""}</b>`,
+    `Seções totalizadas: ${pctSecoes}% (${fmtNumero(st)}/${fmtNumero(ts)})`,
     ``,
-    ...candidatos,
+    ...linhasCandidatos,
   ].join("\n");
 }
 
@@ -43,9 +79,9 @@ async function consultar() {
   if (!res.ok) throw new Error(`TSE respondeu ${res.status}`);
 
   const dados = decodificarJws(await res.text());
-  if (dados.idg === ultimoIdg) return;
+  if (dados.st === ultimaSt) return;
 
-  ultimoIdg = dados.idg;
+  ultimaSt = dados.st;
   await enviarMensagem(montarMensagem(dados));
 }
 
